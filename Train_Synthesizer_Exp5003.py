@@ -10,12 +10,13 @@ import matplotlib
 matplotlib.use('agg')
 import matplotlib.pyplot as plt
 from scipy.io import wavfile
+from typing import List
 
-from Exp5003.Modules.Modules import Synthesizer
+from Exp5003.Modules.Synthesizer import Synthesizer
 from Exp5003.Modules.Discriminator import Discriminator, R1_Regulator, Feature_Map_Loss, Generator_Loss, Discriminator_Loss
 
 from Noam_Scheduler import Noam_Scheduler
-from Exp5003.Datasets import Dataset, Inference_Dataset, Collater, Inference_Collater
+from Exp5003.Datasets_Synthesizer import Dataset, Inference_Dataset, Collater, Inference_Collater
 from Logger import Logger
 
 from meldataset import mel_spectrogram
@@ -83,8 +84,6 @@ class Trainer:
                 wandb.watch(self.model_dict['Synthesizer'])
 
     def Dataset_Generate(self):
-        token_dict = yaml.load(open(self.hp.Token_Path, 'r', encoding= 'utf-8-sig'), Loader=yaml.Loader)
-        
         train_dataset = Dataset(
             pattern_path= self.hp.Train.Train_Pattern.Path,
             metadata_file= self.hp.Train.Train_Pattern.Metadata_File,
@@ -109,6 +108,7 @@ class Trainer:
             )
         inference_dataset = Inference_Dataset(
             source_audio_paths= self.hp.Train.Inference_in_Train.Source_Audio_Path,
+            reference_audio_paths= self.hp.Train.Inference_in_Train.Reference_Audio_Path,
             sample_rate= self.hp.Sound.Sample_Rate,
             hop_size= self.hp.Sound.Hop_Size
             )
@@ -176,10 +176,6 @@ class Trainer:
         self.criterion_dict = {
             'MSE': torch.nn.MSELoss(reduce= None).to(self.device),
             'MAE': torch.nn.L1Loss(reduce= None).to(self.device),
-            'TokenCTC': torch.nn.CTCLoss(
-                blank= self.hp.Tokens,  # == Token length
-                zero_infinity=True
-                ),
             'R1': R1_Regulator()
             }
         self.optimizer_dict = {
@@ -466,13 +462,27 @@ class Trainer:
             model.train()
 
     @torch.inference_mode()
-    def Inference_Step(self, source_audios, source_audio_lengths, source_audio_paths, start_index= 0, tag_step= False):
+    def Inference_Step(
+        self,
+        source_audios: torch.FloatTensor,
+        source_audio_lengths: torch.IntTensor,
+        reference_audios: torch.FloatTensor,
+        reference_audio_lengths: torch.IntTensor,
+        source_audio_paths: List[str],
+        reference_audio_paths: List[str],
+        start_index: int= 0,
+        tag_step: bool= False
+        ):
         source_audios = source_audios.to(self.device, non_blocking=True)
         source_audio_lengths = source_audio_lengths.to(self.device, non_blocking=True)
+        reference_audios = reference_audios.to(self.device, non_blocking=True)
+        reference_audio_lengths = reference_audio_lengths.to(self.device, non_blocking=True)
 
         prediction_audios = self.model_dict['Synthesizer'].Inference(
             source_audios= source_audios,
-            source_audio_lengths= source_audio_lengths
+            source_audio_lengths= source_audio_lengths,
+            reference_audios= reference_audios,
+            reference_audio_lengths= reference_audio_lengths
             )
 
         mel_lengths = source_audio_lengths // self.hp.Sound.Hop_Size
@@ -498,15 +508,18 @@ class Trainer:
             mel,
             audio,
             source_audio_path,
+            reference_audio_path,
             file
             ) in enumerate(zip(
             prediction_mels,
             prediction_audios,
             source_audio_paths,
+            reference_audio_paths,
             files
             )):
             title = '    '.join([
-                f'Source: {source_audio_path if len(source_audio_path) < 90 else source_audio_path[-90:]}'
+                f'Source: {source_audio_path if len(source_audio_path) < 90 else source_audio_path[-90:]}    '
+                f'Reference: {reference_audio_path if len(reference_audio_path) < 90 else reference_audio_path[-90:]}'
                 ])
             new_figure = plt.figure(figsize=(20, 5 * 3), dpi=100)
             ax = plt.subplot2grid((2, 1), (0, 0))
@@ -538,12 +551,27 @@ class Trainer:
             model.eval()
 
         batch_size = self.hp.Inference_Batch_Size or self.hp.Train.Batch_Size
-        for step, (source_audios, source_audio_lengths, source_audio_paths) in tqdm(
+        for step, (
+            source_audios,
+            source_audio_lengths,
+            reference_audios,
+            reference_audio_lengths,
+            source_audio_paths,
+            reference_audio_paths
+            ) in tqdm(
             enumerate(self.dataloader_dict['Inference']),
             desc='[Inference]',
             total= math.ceil(len(self.dataloader_dict['Inference'].dataset) / batch_size)
             ):
-            self.Inference_Step(source_audios, source_audio_lengths, source_audio_paths, start_index= step * batch_size)
+            self.Inference_Step(
+                source_audios = source_audios,
+                source_audio_lengths = source_audio_lengths,
+                reference_audios = reference_audios,
+                reference_audio_lengths = reference_audio_lengths,
+                source_audio_paths = source_audio_paths,
+                reference_audio_paths = reference_audio_paths,
+                start_index= step * batch_size
+                )
 
         for model in self.model_dict.values():
             model.train()

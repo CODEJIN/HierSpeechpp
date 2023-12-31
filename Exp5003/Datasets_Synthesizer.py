@@ -93,6 +93,7 @@ class Inference_Dataset(torch.utils.data.Dataset):
     def __init__(
         self,
         source_audio_paths: List[str],
+        reference_audio_paths: List[str],
         sample_rate: int,
         hop_size: int,
         ):
@@ -101,20 +102,27 @@ class Inference_Dataset(torch.utils.data.Dataset):
         self.hop_size = hop_size
 
         self.patterns = []
-        for index, source_audio_path in enumerate(source_audio_paths):
+        for index, (source_audio_path, reference_audio_path) in enumerate(zip(source_audio_paths, reference_audio_paths)):
             if not os.path.exists(source_audio_path):
                 logging.warning('The source audio path of index {} is incorrect. This index is ignoired.'.format(index))
                 continue
-            self.patterns.append(source_audio_path)
+            if not os.path.exists(reference_audio_path):
+                logging.warning('The reference audio path of index {} is incorrect. This index is ignoired.'.format(index))
+                continue
+            self.patterns.append((source_audio_path, reference_audio_path))
 
     def __getitem__(self, idx):
-        source_audio_path = self.patterns[idx]
+        source_audio_path, reference_audio_path = self.patterns[idx]
 
         source_audio, _ = librosa.load(source_audio_path, sr= self.sample_rate)
         source_audio = librosa.util.normalize(source_audio) * 0.95
         source_audio = source_audio[:source_audio.shape[0] - (source_audio.shape[0] % self.hop_size)]
 
-        return source_audio, source_audio_path
+        reference_audio, _ = librosa.load(reference_audio_path, sr= self.sample_rate)
+        reference_audio = librosa.util.normalize(reference_audio) * 0.95
+        reference_audio = reference_audio[:reference_audio.shape[0] - (reference_audio.shape[0] % self.hop_size)]
+
+        return source_audio, reference_audio, source_audio_path, reference_audio_path
 
     def __len__(self):
         return len(self.patterns)
@@ -135,14 +143,20 @@ class Collater:
 
 class Inference_Collater:
     def __call__(self, batch):
-        source_audios, source_audio_paths = zip(*batch)
+        source_audios, reference_audios, source_audio_paths, reference_audio_paths = zip(*batch)
         source_audio_lengths = np.array([audio.shape[0] for audio in source_audios])
+        reference_audio_lengths = np.array([audio.shape[0] for audio in reference_audios])
         
         source_audios = Audio_Stack(
             audios= source_audios
             )
+        reference_audios = Audio_Stack(
+            audios= reference_audios
+            )
         
         source_audios = torch.FloatTensor(source_audios)    # [Batch, Audio_t], Audio_t == Feature_t * hop_size
         source_audio_lengths = torch.IntTensor(source_audio_lengths)   # [Batch]
+        reference_audios = torch.FloatTensor(reference_audios)    # [Batch, Audio_t], Audio_t == Feature_t * hop_size
+        reference_audio_lengths = torch.IntTensor(reference_audio_lengths)   # [Batch]
 
-        return source_audios, source_audio_lengths, source_audio_paths
+        return source_audios, source_audio_lengths, reference_audios, reference_audio_lengths, source_audio_paths, reference_audio_paths
