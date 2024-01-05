@@ -122,8 +122,8 @@ class Synthesizer(torch.nn.Module):
         linear_spectrograms = self.linear_spectrogram_func(audios)
         mel_spectrograms = styles = self.linear_to_mel_spectrogram_func(linear_spectrograms)
         prosodies = self.prosody_func(audios)   # [Batch, Prosody_d, Content_t]
-        f0s = self.f0_func(audios) / 100.0
-        f0s_perturbed = self.f0_func(audios_perturbed) / 100.0
+        f0s = self.f0_func(audios) / 200.0
+        f0s_perturbed = self.f0_func(audios_perturbed) / 200.0
         content_lengths = spectrogram_lengths = style_lengths = audio_lengths // self.hp.Sound.Hop_Size
 
         styles = self.style_encoder(
@@ -290,7 +290,7 @@ class Synthesizer(torch.nn.Module):
         ):
         contents = self.wav2vec2(source_audios)
         styles = self.mel_spectrogram_func(reference_audios)   # will be reference_audios
-        f0s = self.f0_func(source_audios) / 100.0   # this is temporal.
+        f0s = self.f0_func(source_audios) / 200.0   # this is temporal.
         
         content_lengths = None
         if not source_audio_lengths is None:
@@ -323,7 +323,7 @@ class Synthesizer(torch.nn.Module):
             reverse= True
             )   # [Batch, Enc_d, Feature_t]
 
-        semantic_f0_encodings, _ = self.semantic_f0_predictor(
+        semantic_f0_encodings, prediction_f0s = self.semantic_f0_predictor(
             encodings= acoustic_samples,
             styles= styles
             )
@@ -335,7 +335,7 @@ class Synthesizer(torch.nn.Module):
             lengths= content_lengths
             )
 
-        return audio_predictions
+        return audio_predictions, f0s, prediction_f0s
 
     def Scale_to_Tensor(
         self,

@@ -90,7 +90,7 @@ class Text2Wav2Vec(torch.nn.Module):
         ):
         contents = self.wav2vec2(audios)
         styles = self.mel_spectrogram_func(audios)   # will be reference_audios
-        f0s = self.f0_func(audios) / 100.0
+        f0s = self.f0_func(audios) / 200.0
         content_lengths = style_lengths = audio_lengths // self.hp.Sound.Hop_Size
 
         styles = self.style_encoder(

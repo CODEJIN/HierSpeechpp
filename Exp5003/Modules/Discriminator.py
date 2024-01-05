@@ -62,16 +62,33 @@ class Discriminator(torch.nn.Module):
                     )
                 for pool_kernel_size in scale_pool_kernel_size_list
                 ])
+            
+        self.r1_regulator = R1_Regulator()
 
-    def forward(self, audios: torch.Tensor):
-        discriminations_list, feature_maps_list = [], []
-        
+    def forward(
+        self,
+        audios: torch.FloatTensor,
+        prediction_audios: torch.FloatTensor
+        ):
+        discriminations_list_for_real, feature_maps_list_for_real = [], []        
         for discriminator in self.discriminators:
-            discriminations, feature_maps = discriminator(audios)
-            discriminations_list.append(discriminations)
-            feature_maps_list.extend(feature_maps)
+            discriminations_for_real, feature_maps_for_real = discriminator(audios)
+            discriminations_list_for_real.append(discriminations_for_real)
+            feature_maps_list_for_real.extend(feature_maps_for_real)
 
-        return discriminations_list, feature_maps_list
+        discriminations_list_for_fake, feature_maps_list_for_fake = [], []        
+        for discriminator in self.discriminators:
+            discriminations_for_fake, feature_maps_for_fake = discriminator(prediction_audios)
+            discriminations_list_for_fake.append(discriminations_for_fake)
+            feature_maps_list_for_fake.extend(feature_maps_for_fake)
+
+        with torch.cuda.amp.autocast(enabled= False):
+            discrimination_loss = Discriminator_Loss(discriminations_list_for_real, discriminations_list_for_fake)
+            r1_loss = self.r1_regulator(discriminations_list_for_real, audios)
+            generator_loss = Generator_Loss(discriminations_list_for_fake)
+            feature_map_loss = Feature_Map_Loss(feature_maps_list_for_real, feature_maps_list_for_fake)
+
+        return discrimination_loss, r1_loss, generator_loss, feature_map_loss
 
 
 class Period_Discriminator(torch.nn.Module):

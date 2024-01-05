@@ -132,7 +132,8 @@ class Trainer:
             collate_fn= collater,
             batch_size= self.hp.Train.Batch_Size,
             num_workers= self.hp.Train.Num_Workers,
-            pin_memory= True
+            pin_memory= True,
+            drop_last= True
             )
         
     def Model_Generate(self):

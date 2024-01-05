@@ -1348,5 +1348,5 @@ if __name__ == '__main__':
     Metadata_Generate()
     Metadata_Generate(eval= True)
 
-# python -m Exp5000.Pattern_Generator -hp Exp5000/Hyper_Parameters.yaml -lj D:\Rawdata\LJSpeech
+# python -m Exp5003.Pattern_Generator -hp Exp5003/Hyper_Parameters_Synthesizer.yaml -lj D:\Rawdata\LJSpeech
 # python -m Exp5003.Pattern_Generator -hp Exp5003/Hyper_Parameters.yaml -libri F:\Rawdata\LibriTTS_Clean

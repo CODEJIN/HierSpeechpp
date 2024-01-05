@@ -140,7 +140,8 @@ class Trainer:
             collate_fn= collater,
             batch_size= self.hp.Train.Batch_Size,
             num_workers= self.hp.Train.Num_Workers,
-            pin_memory= True
+            pin_memory= True,
+            drop_last= True
             )
         self.dataloader_dict['Inference'] = torch.utils.data.DataLoader(
             dataset= inference_dataset,
@@ -173,11 +174,6 @@ class Trainer:
             fmax= None
             )
 
-        self.criterion_dict = {
-            'MSE': torch.nn.MSELoss(reduce= None).to(self.device),
-            'MAE': torch.nn.L1Loss(reduce= None).to(self.device),
-            'R1': R1_Regulator()
-            }
         self.optimizer_dict = {
             'Synthesizer': torch.optim.AdamW(
                 params= self.model_dict['Synthesizer'].parameters(),
@@ -223,11 +219,12 @@ class Trainer:
                 )
             
             audios_slice.requires_grad_()
-            discriminations_list_for_real, _ = self.model_dict['Discriminator'](audios_slice,)
-            discriminations_list_for_fake, _ = self.model_dict['Discriminator'](prediction_audios_slice.detach())
-            with torch.cuda.amp.autocast(enabled= False):
-                loss_dict['Discrimination'] = Discriminator_Loss(discriminations_list_for_real, discriminations_list_for_fake)
-                loss_dict['R1'] = self.criterion_dict['R1'](discriminations_list_for_real, audios_slice)
+            discrimination_loss, r1_loss, _, _ = self.model_dict['Discriminator'](
+                audios= audios_slice,
+                prediction_audios= prediction_audios_slice.detach()
+                )
+            loss_dict['Discrimination'] = discrimination_loss
+            loss_dict['R1'] = r1_loss
 
         self.optimizer_dict['Discriminator'].zero_grad()
 
@@ -244,8 +241,10 @@ class Trainer:
         self.scheduler_dict['Discriminator'].step()
 
         with torch.cuda.amp.autocast(enabled= self.hp.Use_Mixed_Precision):
-            discriminations_list_for_real, feature_maps_list_for_real = self.model_dict['Discriminator'](audios_slice,)
-            discriminations_list_for_fake, feature_maps_list_for_fake = self.model_dict['Discriminator'](prediction_audios_slice)
+            _, _, generator_loss, feature_map_loss = self.model_dict['Discriminator'](
+                audios_slice,
+                prediction_audios_slice
+                )
             with torch.cuda.amp.autocast(enabled= False):
                 loss_dict['STFT'] = stft_loss
                 loss_dict['Semantic_F0'] = semantic_f0_loss
@@ -254,8 +253,8 @@ class Trainer:
                 loss_dict['Encoding_Clean_to_Perturbed_KLD'] = encoding_clean_to_perturbed_kld_loss
                 loss_dict['Encoding_Clean_to_Acoustic_KLD'] = encoding_clean_to_acoustic_kld_loss
                 loss_dict['Acoustic_to_Encoding_Clean_KLD'] = acoustic_to_encoding_clean_kld_loss
-                loss_dict['Adversarial'] = Generator_Loss(discriminations_list_for_fake)
-                loss_dict['Feature_Map'] = Feature_Map_Loss(feature_maps_list_for_real, feature_maps_list_for_fake)
+                loss_dict['Adversarial'] = generator_loss
+                loss_dict['Feature_Map'] = feature_map_loss
 
         self.optimizer_dict['Synthesizer'].zero_grad()
         self.scaler.scale(
@@ -341,8 +340,10 @@ class Trainer:
                 )
 
             audios_slice.requires_grad_() # to calculate gradient penalty.
-            discriminations_list_for_real, feature_maps_list_for_real = self.model_dict['Discriminator'](audios_slice)
-            discriminations_list_for_fake, feature_maps_list_for_fake = self.model_dict['Discriminator'](prediction_audios_slice)
+            discrimination_loss, r1_loss, generator_loss, feature_map_loss = self.model_dict['Discriminator'](
+                audios= audios_slice,
+                prediction_audios= prediction_audios_slice
+                )
             with torch.cuda.amp.autocast(enabled= False):
                 loss_dict['STFT'] = stft_loss
                 loss_dict['Semantic_F0'] = semantic_f0_loss
@@ -351,10 +352,10 @@ class Trainer:
                 loss_dict['Encoding_Clean_to_Perturbed_KLD'] = encoding_clean_to_perturbed_kld_loss
                 loss_dict['Encoding_Clean_to_Acoustic_KLD'] = encoding_clean_to_acoustic_kld_loss
                 loss_dict['Acoustic_to_Encoding_Clean_KLD'] = acoustic_to_encoding_clean_kld_loss
-                loss_dict['Discrimination'] = Discriminator_Loss(discriminations_list_for_real, discriminations_list_for_fake)
-                loss_dict['R1'] = self.criterion_dict['R1'](discriminations_list_for_real, audios_slice)
-                loss_dict['Adversarial'] = Generator_Loss(discriminations_list_for_fake)
-                loss_dict['Feature_Map'] = Feature_Map_Loss(feature_maps_list_for_real, feature_maps_list_for_fake)
+                loss_dict['Discrimination'] = discrimination_loss
+                loss_dict['R1'] = r1_loss
+                loss_dict['Adversarial'] = generator_loss
+                loss_dict['Feature_Map'] = feature_map_loss
 
         for tag, loss in loss_dict.items():
             loss = reduce_tensor(loss.data, self.num_gpus).item() if self.num_gpus > 1 else loss.item()
@@ -385,44 +386,49 @@ class Trainer:
             # self.writer_dict['Evaluation'].add_histogram_model(self.model_dict['Synthesizer'], 'Synthesizer', self.steps, delete_keywords=[])
             # self.writer_dict['Evaluation'].add_histogram_model(self.model_dict['Discriminator'], 'Discriminator', self.steps, delete_keywords=[])
         
-            index = np.random.randint(0, audios.size(0))
+            source_index, reference_index = np.random.randint(0, audios.size(0), size= 2)
 
             with torch.inference_mode():
-                prediction_audios = self.model_dict['Synthesizer'].Inference(
-                    source_audios= audios[index].unsqueeze(0).to(self.device),
-                    source_audio_lengths= audio_lengths[index].unsqueeze(0).to(self.device),
+                prediction_audios, source_f0s, prediction_f0s = self.model_dict['Synthesizer'].Inference(
+                    source_audios= audios[source_index, None].to(self.device),
+                    reference_audios= audios[reference_index, None].to(self.device),
+                    source_audio_lengths= audio_lengths[source_index, None].to(self.device),
+                    reference_audio_lengths= audio_lengths[reference_index, None].to(self.device),
                     )
             
-            audio_length = audio_lengths[index]
-            spectrogram_length = audio_length // self.hp.Sound.Hop_Size
+            prediction_audio_length = source_audio_length = audio_lengths[source_index]
+            reference_audio_length = audio_lengths[reference_index]
+            prediction_spectrogram_length = source_spectrogram_length = source_audio_length // self.hp.Sound.Hop_Size
+            reference_spectrogram_length = reference_audio_length // self.hp.Sound.Hop_Size
+            prediction_f0_length = source_f0_length = source_audio_length // self.hp.Sound.F0_Hop_Size
 
-            target_audio = audios[index, :audio_length]
-            prediction_audio = prediction_audios[0, :audio_length]
 
-            mel_func = partial(
-                mel_spectrogram,
-                n_fft= self.hp.Sound.N_FFT,
-                num_mels= self.hp.Sound.N_Mel,
-                sampling_rate= self.hp.Sound.Sample_Rate,
-                hop_size= self.hp.Sound.Hop_Size,
-                win_size= self.hp.Sound.Window_Size,
-                fmin= 0,
-                fmax= None
-                )
+            source_audio = audios[source_index, :source_audio_length]
+            reference_audio = audios[reference_index, :reference_audio_length]
+            prediction_audio = prediction_audios[0, :prediction_audio_length]
 
-            target_mel = mel_func(target_audio[None])[0, :, :spectrogram_length].cpu().numpy()
-            prediction_mel = mel_func(prediction_audio[None])[0, :, :spectrogram_length].cpu().numpy()
+            source_mel = self.mel_func(source_audio[None])[0, :, :source_spectrogram_length].cpu().numpy()
+            reference_mel = self.mel_func(reference_audio[None])[0, :, :reference_spectrogram_length].cpu().numpy()
+            prediction_mel = self.mel_func(prediction_audio[None])[0, :, :prediction_spectrogram_length].cpu().numpy()
             
-            target_audio = target_audio.cpu().numpy()
+            source_audio = source_audio.cpu().numpy()
+            reference_audio = reference_audio.cpu().numpy()
             prediction_audio = prediction_audio.cpu().numpy()
 
+            source_f0 = source_f0s[0, :source_f0_length].cpu().numpy()
+            prediction_f0 = prediction_f0s[0, :prediction_f0_length].cpu().numpy()
+
             image_dict = {
-                'Mel/Target': (target_mel, None, 'auto', None, None, None),
+                'Mel/Source': (source_mel, None, 'auto', None, None, None),
+                'Mel/Reference': (reference_mel, None, 'auto', None, None, None),
                 'Mel/Prediction': (prediction_mel, None, 'auto', None, None, None),
+                'F0/Target': (source_f0, None, 'auto', None, None, None),
+                'F0/Prediction': (prediction_f0, None, 'auto', None, None, None),
                 }
             audio_dict = {
-                'Audio/Target': (target_audio, self.hp.Sound.Sample_Rate),
-                'Audio/Linear': (prediction_audio, self.hp.Sound.Sample_Rate),
+                'Audio/Source': (source_audio, self.hp.Sound.Sample_Rate),
+                'Audio/Reference': (reference_audio, self.hp.Sound.Sample_Rate),
+                'Audio/Prediction': (prediction_audio, self.hp.Sound.Sample_Rate),
                 }
 
             self.writer_dict['Evaluation'].add_image_dict(image_dict, self.steps)
@@ -439,17 +445,30 @@ class Trainer:
                     )
                 wandb.log(
                     data= {
-                        'Evaluation.Mel.Target': wandb.Image(target_mel),
-                        'Evaluation.Mel.Prediction': wandb.Image(prediction_mel),                        
-                        'Evaluation.Audio.Target': wandb.Audio(
-                            target_audio,
-                            sample_rate= self.hp.Sound.Sample_Rate,
-                            caption= 'Target_Audio'
+                        'Evaluation.Mel.Source': wandb.Image(source_mel),
+                        'Evaluation.Mel.Reference': wandb.Image(reference_mel),
+                        'Evaluation.Mel.Prediction': wandb.Image(prediction_mel),
+                        'Evaluation.F0': wandb.plot.line_series(
+                            xs= np.arange(source_f0_length),
+                            ys= [source_f0, prediction_f0],
+                            keys= ['Source', 'Prediction'],
+                            title= 'F0',
+                            xname= 'F0_t'
                             ),
-                        'Evaluation.Audio.Linear': wandb.Audio(
+                        'Evaluation.Audio.Source': wandb.Audio(
+                            source_audio,
+                            sample_rate= self.hp.Sound.Sample_Rate,
+                            caption= 'Source_Audio'
+                            ),
+                        'Evaluation.Audio.Reference': wandb.Audio(
+                            reference_audio,
+                            sample_rate= self.hp.Sound.Sample_Rate,
+                            caption= 'Reference_Audio'
+                            ),
+                        'Evaluation.Audio.Prediction': wandb.Audio(
                             prediction_audio,
                             sample_rate= self.hp.Sound.Sample_Rate,
-                            caption= 'Linear_Audio'
+                            caption= 'Prediction_Audio'
                             ),
                         },
                     step= self.steps,
@@ -478,7 +497,7 @@ class Trainer:
         reference_audios = reference_audios.to(self.device, non_blocking=True)
         reference_audio_lengths = reference_audio_lengths.to(self.device, non_blocking=True)
 
-        prediction_audios = self.model_dict['Synthesizer'].Inference(
+        prediction_audios, source_f0s, prediction_f0s = self.model_dict['Synthesizer'].Inference(
             source_audios= source_audios,
             source_audio_lengths= source_audio_lengths,
             reference_audios= reference_audios,
@@ -486,6 +505,7 @@ class Trainer:
             )
 
         mel_lengths = source_audio_lengths // self.hp.Sound.Hop_Size
+        f0_lengths = source_audio_lengths // self.hp.Sound.F0_Hop_Size
         prediction_mels = [
             mel[:, :length]
             for mel, length in zip(self.mel_func(prediction_audios.cpu()).numpy(), mel_lengths)
@@ -493,6 +513,14 @@ class Trainer:
         prediction_audios = [
             audio[:length]
             for audio, length in zip(prediction_audios.cpu().numpy(), source_audio_lengths)
+            ]
+        source_f0s = [
+            f0[:length]
+            for f0, length in zip(source_f0s.cpu().numpy(), f0_lengths)
+            ]
+        prediction_f0s = [
+            f0[:length]
+            for f0, length in zip(prediction_f0s.cpu().numpy(), f0_lengths)
             ]
 
         files = []
@@ -507,12 +535,16 @@ class Trainer:
         for index, (
             mel,
             audio,
+            source_f0,
+            prediction_f0,
             source_audio_path,
             reference_audio_path,
             file
             ) in enumerate(zip(
             prediction_mels,
             prediction_audios,
+            source_f0s,
+            prediction_f0s,
             source_audio_paths,
             reference_audio_paths,
             files
@@ -522,15 +554,22 @@ class Trainer:
                 f'Reference: {reference_audio_path if len(reference_audio_path) < 90 else reference_audio_path[-90:]}'
                 ])
             new_figure = plt.figure(figsize=(20, 5 * 3), dpi=100)
-            ax = plt.subplot2grid((2, 1), (0, 0))
+            ax = plt.subplot2grid((3, 1), (0, 0))
             plt.imshow(mel, aspect='auto', origin='lower')
             plt.title(f'Prediction  {title}')
             plt.colorbar(ax= ax)
-            ax = plt.subplot2grid((2, 1), (1, 0))
+            ax = plt.subplot2grid((3, 1), (1, 0))
             plt.plot(audio)
             plt.margins(x= 0)
             plt.title(f'Audio    {title}')
             plt.colorbar(ax= ax)
+            ax = plt.subplot2grid((3, 1), (2, 0))
+            plt.plot(source_f0, label= 'Source')
+            plt.plot(prediction_f0, label= 'Prediction')
+            plt.margins(x= 0)
+            plt.title(f'F0    {title}')
+            plt.colorbar(ax= ax)
+            plt.legend()
             plt.tight_layout()
             plt.savefig(os.path.join(self.hp.Inference_Path, 'Step-{}'.format(self.steps), 'PNG', '{}.png'.format(file)).replace('\\', '/'))
             plt.close(new_figure)
