@@ -12,11 +12,10 @@ import matplotlib.pyplot as plt
 from scipy.io import wavfile
 from typing import List
 
-from Exp5004.Modules.Synthesizer import Synthesizer
-from Exp5004.Modules.Discriminator import Discriminator
+from Exp5005.Modules.Synthesizer import Synthesizer
+from Exp5005.Modules.Discriminator import Discriminator
 
-from Noam_Scheduler import Noam_Scheduler
-from Exp5004.Datasets_Synthesizer import Dataset, Inference_Dataset, Collater, Inference_Collater
+from Exp5005.Datasets_Synthesizer import Dataset, Inference_Dataset, Collater, Inference_Collater
 from Logger import Logger
 
 from meldataset import mel_spectrogram
@@ -189,13 +188,15 @@ class Trainer:
                 ),
             }
         self.scheduler_dict = {
-            'Synthesizer': Noam_Scheduler(
+            'Synthesizer': torch.optim.lr_scheduler.ExponentialLR(
                 optimizer= self.optimizer_dict['Synthesizer'],
-                warmup_steps= self.hp.Train.Learning_Rate.Warmup_Step
+                gamma= self.hp.Train.Learning_Rate.Decay,
+                last_epoch= -1
                 ),
-            'Discriminator': Noam_Scheduler(
+            'Discriminator': torch.optim.lr_scheduler.ExponentialLR(
                 optimizer= self.optimizer_dict['Discriminator'],
-                warmup_steps= self.hp.Train.Learning_Rate.Warmup_Step
+                gamma= self.hp.Train.Learning_Rate.Decay,
+                last_epoch= -1
                 ),
             }
 
@@ -238,7 +239,6 @@ class Trainer:
 
         self.scaler.step(self.optimizer_dict['Discriminator'])
         self.scaler.update()
-        self.scheduler_dict['Discriminator'].step()
 
         with torch.cuda.amp.autocast(enabled= self.hp.Use_Mixed_Precision):
             _, _, generator_loss, feature_map_loss = self.model_dict['Discriminator'](
@@ -279,7 +279,6 @@ class Trainer:
 
         self.scaler.step(self.optimizer_dict['Synthesizer'])
         self.scaler.update()
-        self.scheduler_dict['Synthesizer'].step()
 
         self.steps += 1
         self.tqdm.update(1)
@@ -294,6 +293,10 @@ class Trainer:
                 audios= audios,
                 audio_lengths= audio_lengths
                 )
+
+            if self.steps % math.ceil(len(self.dataloader_dict['Train'].dataset) / self.hp.Train.Train_Pattern.Accumulated_Dataset_Epoch / self.hp.Train.Batch_Size) == 0:
+                self.scheduler_dict['Synthesizer'].step()
+                self.scheduler_dict['Discriminator'].step()
 
             if self.steps % self.hp.Train.Checkpoint_Save_Interval == 0:
                 self.Save_Checkpoint()

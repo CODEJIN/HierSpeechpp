@@ -1,0 +1,144 @@
+Sound:
+    N_FFT: 1280
+    N_Mel: 128
+    Window_Size: 1280
+    Hop_Size: 320
+    Sample_Rate: 16000
+    F0_Min: 65
+    F0_Max: 2094
+    F0_Hop_Size: 80
+
+Tokens: 59
+Wav2Vec2_Size: 1024
+
+Token_Encoder:
+    Size: 256
+    Residual:
+        Pre_Stack: 3
+        Post_Stack: 3
+        Head: 4
+        Kernel_Size: 9
+        Dropout_Rate: 0.2
+
+Content_Encoder:        
+    Wavenet:
+        Stack: 16
+        Kernel_Size: 5
+        Dilation_Rate: 1
+
+Style:
+    Size: 256
+    Temporal_kernel_Size: 5
+    Head: 2
+    Dropout_Rate: 0.1
+
+Duration_Predictor:
+    Kernel_Size: 3
+    Conv_Stack: 3
+    Flow_Stack: 4
+    Dropout_Rate: 0.5
+
+F0_Predictor:
+    Prenet:
+        Kernel_Size: 7
+    Upsample:
+        Base_Size: 256
+        Rate: [2, 2]    # Window_Size / F0_Hop_Size
+        Kernel_Size: [4, 4]
+    Residual_Block:
+        Kernel_Size: [3, 5, 7]
+        Dilation_Size: [[1, 3, 5], [1, 3, 5], [1, 3, 5]]
+    Postnet:
+        Kernel_Size: 7
+    LeakyReLU_Negative_Slope: 0.1
+
+Flow:
+    Stack: 4
+    DiT_Stack: 3
+    Head: 4 # One more check, t2w2v 2, syntheizer 4
+    Kernel_Size: 5
+    Dropout_Rate: 0.1
+
+Decoder:
+    Size: 512
+    Stack: 8
+    Kernel_Size: 5
+    Dilation_Rate: 1
+    Dropout_Rate: 0.1
+    LeakyReLU_Negative_Slope: 0.1
+
+Token_Predictor:
+    Size: 256
+    LSTM:
+        Stack: 2
+        Dropout_Rate: 0.1
+
+Token_Path: 'F:/Datasets/16K.HierSpeechpp.Libri/Token.yaml'
+Spectrogram_Range_Info_Path: 'F:/Datasets/16K.HierSpeechpp.Libri/Spectrogram_Range_Info.yaml'
+Mel_Range_Info_Path: 'F:/Datasets/16K.HierSpeechpp.Libri/Mel_Range_Info.yaml'
+F0_Info_Path: 'F:/Datasets/16K.HierSpeechpp.Libri/F0_Info.yaml'
+Energy_Info_Path: 'F:/Datasets/16K.HierSpeechpp.Libri/Energy_Info.yaml'
+Speaker_Info_Path: 'F:/Datasets/16K.HierSpeechpp.Libri/Speaker_Info.yaml'
+Emotion_Info_Path: 'F:/Datasets/16K.HierSpeechpp.Libri/Emotion_Info.yaml'
+Language_Info_Path: 'F:/Datasets/16K.HierSpeechpp.Libri/Language_Info.yaml'
+Gender_Info_Path: 'F:/Datasets/16K.HierSpeechpp.Libri/Gender_Info.yaml'
+Language_and_Gender_Info_by_Speaker_Path: 'F:/Datasets/16K.HierSpeechpp.Libri/Language_and_Gender_Info_by_Speaker.yaml'
+Train:
+    Pattern_Cache: false
+    Train_Pattern:
+        Path: 'F:/Datasets/16K.HierSpeechpp.Libri/Train'
+        Metadata_File: 'METADATA.PICKLE'
+        Audio_Length:
+            Min: 20480
+            Max: 256000
+        Text_Length:
+            Min: 1
+            Max: 200
+        Accumulated_Dataset_Epoch: 1 # This is to prevent slow down from torch.utils.data.DataLoader when the number of patterns is small.
+        Augmentation_Ratio: 0.10
+    Eval_Pattern:
+        Path: 'F:/Datasets/16K.HierSpeechpp.Libri/Eval'
+        Metadata_File: 'METADATA.PICKLE'
+        Audio_Length:
+            Min: 20480
+            Max: 256000
+        Text_Length:
+            Min: 10
+            Max: 200
+    Num_Workers: 0
+    Batch_Size: 8
+    Learning_Rate:
+        Initial: 1.0e-4
+        Warmup_Step: 4000
+        Lambda:
+            STFT: 45.0
+            Token_CTC: 45.0
+            Feature_Map: 2.0
+    ADAM:
+        Beta1: 0.8
+        Beta2: 0.99
+        Epsilon: 1.0e-9
+    Gradient_Norm: 0.0
+    Max_Step: 1000000
+    Checkpoint_Save_Interval: 10000
+    Logging_Interval: 1
+    Evaluation_Interval: 1000
+
+Checkpoint_Path: './results/Exp5003/Text2Wav2Vec/Checkpoint'
+Log_Path: './results/Exp5003/Text2Wav2Vec/Log'
+
+Weights_and_Biases:
+    # Use: true
+    Use: false
+    Project: 'HierSpeechpp'
+    Entity: 'codejin'
+    Name: 'Exp5003_Text2Wav2Vec'
+    Save_Checkpoint:
+        Use: false
+        Interval: 50000 # Unlike local, The capacity of WandB is small.
+
+Use_Mixed_Precision: true
+Use_Multi_GPU: false
+Device: '0'
+# Use_Multi_GPU: true
+# Device: '0,1,2,3,4,5,6,7'
